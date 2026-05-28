@@ -1,0 +1,33 @@
+{
+  "name": "Cachorritos — De la Chacra a tu Olla",
+  "short_name": "Cachorritos",
+  "description": "Sistema de ventas agrícola: caja, inventario, clientes y reportes",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#ffffff",
+  "theme_color": "#1a6b3a",
+  "lang": "es-PE",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ],
+  "categories": ["business", "productivity", "finance"],
+  "screenshots": [],
+  "shortcuts": [
+    {
+      "name": "Nueva venta",
+      "short_name": "Venta",
+      "description": "Registrar una nueva venta rápidamente",
+      "url": "./index.html#ventas",
+      "icons": [{ "src": "icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Abrir caja",
+      "short_name": "Caja",
+      "description": "Abrir la caja del día",
+      "url": "./index.html#caja",
+      "icons": [{ "src": "icon-192.png", "sizes": "192x192" }]
+    }
+  ]
+}
