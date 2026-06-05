@@ -132,6 +132,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
 </head>
 <body>
 
+<!-- LOGIN -->
 <div id="login-screen" class="login-wrap">
   <div class="login-box">
     <div class="login-logo">
@@ -159,6 +160,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
   </div>
 </div>
 
+<!-- APP -->
 <div id="app-screen" class="app" style="display:none">
   <aside class="sb">
     <div class="logo">
@@ -234,7 +236,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
 
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged, setPersistence, browserSessionPersistence } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
 import { getFirestore, doc, setDoc, getDoc, collection, getDocs, addDoc, updateDoc, deleteDoc, onSnapshot, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 
 // ── FIREBASE CONFIG ──
@@ -251,21 +253,21 @@ const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
 
+// Sesión solo dura mientras el navegador está abierto — no persiste al cerrar
+await setPersistence(auth, browserSessionPersistence);
+
 // ── UTILS ──
 function $(id){return document.getElementById(id);}
 function M(h){$('MR').innerHTML=h;}
-
-// FIX 1: Exponer cM a window para que funcione onclick="cM()"
 function cM(){M('');}
 window.cM = cM;
-
-// FIX 2: Calcular fecha en base a la zona horaria local (Perú) para no adelantar un día a las 7PM UTC
+window.M = M;
 function hoy(){
-  var tzOffset = (new Date()).getTimezoneOffset() * 60000;
-  return new Date(Date.now() - tzOffset).toISOString().split('T')[0];
+  return new Date().toLocaleDateString('en-CA',{timeZone:'America/Lima'});
 }
-
-function hora(){return new Date().toLocaleTimeString('es-PE',{hour:'2-digit',minute:'2-digit'});}
+function hora(){
+  return new Date().toLocaleTimeString('es-PE',{hour:'2-digit',minute:'2-digit',timeZone:'America/Lima'});
+}
 function dDesde(f){return Math.max(0,Math.floor((new Date()-new Date(f))/864e5));}
 function mon(v){return 'S/ '+Number(v||0).toLocaleString('es-PE',{minimumFractionDigits:2,maximumFractionDigits:2});}
 function pct(v,t){return t?Math.min(100,Math.round(v/t*100)):0;}
@@ -291,19 +293,18 @@ var S={
   stMin:12,
   prods:[],ventas:[],clis:[],provs:[],entradas:[],mermas:[],ajustes:[],
 };
-// FIX 3: Exponer el estado 'S' globalmente para que funcione el cambio de pestañas y edición de negocio (S.tab='', S.neg.nom='')
-window.S = S;
 
 // ── ROLES ──
 var selectedRole='dueno';
-// FIX 4: Exponer selRole a window para arreglar el botón de Cajero/Dueño
+// Exponer globalmente para onclick en HTML
 window.selRole = function(r){
   selectedRole=r;
   $('role-dueno').classList.toggle('on',r==='dueno');
   $('role-cajero').classList.toggle('on',r==='cajero');
-  // Auto-fill email hint
   $('l-email').value=r==='dueno'?'dueño@cachorritos.com':'usuario@cachorritos.com';
 };
+// Alias local
+function selRole(r){ window.selRole(r); }
 
 // ── LOGIN ──
 window.doLogin=async function(){
@@ -315,8 +316,10 @@ window.doLogin=async function(){
   btn.textContent='Ingresando...';
   btn.disabled=true;
   try{
+    _loginInProgress = true; // marcar que este login es intencional
     await signInWithEmailAndPassword(auth,email,pass);
   }catch(e){
+    _loginInProgress = false;
     errEl.textContent='Correo o contraseña incorrectos';
     errEl.style.display='block';
     btn.innerHTML='<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg> Ingresar';
@@ -325,35 +328,63 @@ window.doLogin=async function(){
 };
 
 window.doLogout=async function(){
-  await signOut(auth);
+  // Resetear estado completo
+  S.prods=[]; S.ventas=[]; S.clis=[]; S.provs=[];
+  S.entradas=[]; S.mermas=[]; S.ajustes=[];
+  S.caja={open:false,fecha:null,ini:0,gastos:[]};
+  S.pg='dashboard'; S.tab=''; S.userEmail=''; S.rol='';
+  _loginInProgress = false;
+  await signOut(auth); // Firebase invalida la sesión
+  mostrarLogin();
 };
 
 // ── AUTH STATE ──
-onAuthStateChanged(auth,async function(user){
-  if(user){
-    S.userEmail=user.email;
-    S.rol=user.email.includes('dueño')||user.email.includes('dueno')?'dueno':'cajero';
-    $('login-screen').style.display='none';
-    $('app-screen').style.display='flex';
-    $('user-label').textContent=S.rol==='dueno'?'👑 Dueño':'🧾 Cajero';
+// Estado de auth — solo reacciona al login manual, nunca auto-login
+let _loginInProgress = false;
+
+onAuthStateChanged(auth, async function(user){
+  if(user && _loginInProgress){
+    _loginInProgress = false;
+    S.userEmail = user.email;
+    S.rol = selectedRole; // usa el rol que el usuario seleccionó en la UI
+    $('login-screen').style.display = 'none';
+    $('app-screen').style.display = 'flex';
+    $('user-label').textContent = S.rol==='dueno' ? '👑 Dueño' : '🧾 Cajero';
     await cargarDatos();
     go('dashboard');
-  }else{
-    $('login-screen').style.display='flex';
-    $('app-screen').style.display='none';
+  } else if(!user){
+    // Sin sesión: mostrar login siempre
+    _loginInProgress = false;
+    mostrarLogin();
   }
 });
+
+function mostrarLogin(){
+  $('login-screen').style.display = 'flex';
+  $('app-screen').style.display = 'none';
+  // Resetear campos
+  var ep = $('l-email'), pp = $('l-pass');
+  if(ep) ep.value = '';
+  if(pp) pp.value = '';
+  var eb = $('login-btn');
+  if(eb){ eb.textContent='Ingresar'; eb.disabled=false; }
+  var err = $('login-err');
+  if(err) err.style.display='none';
+  selRole('dueno');
+}
 
 // ── FIRESTORE: CARGAR DATOS ──
 async function cargarDatos(){
   showSync('Cargando datos...','');
   try{
+    // Cargar colecciones principales
     var cols=['prods','ventas','clis','provs','entradas','mermas','ajustes'];
     for(var i=0;i<cols.length;i++){
       var snap=await getDocs(collection(db,cols[i]));
       S[cols[i]]=[];
       snap.forEach(function(d){S[cols[i]].push(Object.assign({_id:d.id},d.data()));});
     }
+    // Cargar config
     var cfgSnap=await getDoc(doc(db,'config','negocio'));
     if(cfgSnap.exists())S.neg=cfgSnap.data();
     var cajaSnap=await getDoc(doc(db,'config','caja'));
@@ -386,7 +417,6 @@ async function saveConfig(key,data){
     await setDoc(doc(db,'config',key),data,{merge:true});
   }catch(e){console.error(e);}
 }
-window.saveConfig = saveConfig; // FIX: Exponer para HTML en Boletas
 
 function limpiar(obj){
   var o={};
@@ -433,7 +463,10 @@ var pgCfg={
 };
 
 window.go=function(pg,tab){
-  S.pg=pg; S.tab=tab||'';
+  // Si cambia de página (no solo de tab), resetear tab
+  if(pg !== S.pg) S.tab = tab||'';
+  else S.tab = tab||S.tab;
+  S.pg=pg;
   var c=pgCfg[pg]||{t:pg,btn:null};
   $('tt').textContent=c.t;
   var b=$('tb');
@@ -459,8 +492,7 @@ window.topAct=function(){
 };
 
 var vIC=1;
-// FIX 5: Exponer rend a window para las pestañas dinámicas
-window.rend = function(){
+function rend(){
   var pages={dashboard:rDash,caja:rCaja,ventas:rVentas,inventario:rInv,clientes:rClis,provs:rProvs,reportes:rRep,boletas:rBoletas};
   var fn=pages[S.pg]||rDash;
   try{
@@ -966,10 +998,11 @@ window.exportResumen=function(){
 };
 
 // ══ INIT NAVIGATION ══
+window.saveConfig=saveConfig;
 document.querySelectorAll('.nav[data-p]').forEach(function(el){el.addEventListener('click',function(){go(el.dataset.p);});});
 
 // Auto-fill role email on load
-window.selRole('dueno'); // Se llama usando la nueva versión expuesta a window
+selRole('dueno');
 </script>
 </body>
 </html>
