@@ -562,105 +562,312 @@ function rCaja(){
 }
 
 // ══ VENTAS ══
+// ─── estado de pesaje (persiste mientras el usuario esté en la pestaña) ───
+var _sacos = [];          // [{kg: number}]  uno por saco
+var _saveInProgress = false;
+
+// ─── navegación de tabs ───
+window.vTab = function(t){ S.tab = t; if(t==='nueva') _sacos = []; rend(); };
+
 function rVentas(){
-  var t=S.tab||'nueva';
-  var tabs='<div class="tabs"><div class="tab '+(t==='nueva'?'on':'')+'" onclick="S.tab=\'nueva\';rend()">Nueva venta</div><div class="tab '+(t==='hist'?'on':'')+'" onclick="S.tab=\'hist\';rend()">Historial</div><div class="tab '+(t==='anu'?'on':'')+'" onclick="S.tab=\'anu\';rend()">Anulaciones</div></div>';
-  if(t==='nueva')return tabs+rNuevaV();
-  if(t==='hist')return tabs+rHistV();
-  return tabs+rAnulaciones();
+  var t = S.tab || 'nueva';
+  var tabs =
+    '<div class="tabs">' +
+    '<button class="inv-tab-btn '+(t==='nueva'?'on':'')+'" onclick="vTab(\'nueva\')">Nueva venta</button>' +
+    '<button class="inv-tab-btn '+(t==='hist'?'on':'')+'" onclick="vTab(\'hist\')">Historial</button>' +
+    '<button class="inv-tab-btn '+(t==='anu'?'on':'')+'" onclick="vTab(\'anu\')">Anulaciones</button>' +
+    '</div>';
+  if (t === 'nueva') return tabs + rNuevaV();
+  if (t === 'hist')  return tabs + rHistV();
+  return tabs + rAnulaciones();
 }
 
+// ─────────────────────────────────────────
+//  NUEVA VENTA  ←  módulo de pesaje
+// ─────────────────────────────────────────
 function rNuevaV(){
-  vIC=1;
-  var prodOpts=''; S.prods.forEach(function(p){prodOpts+='<option value="'+p.id+'">'+p.nom+' ('+p.qty+' sac.)</option>';});
-  var cliOpts=''; S.clis.forEach(function(c){cliOpts+='<option value="'+c.nom+'">';});
-  return '<div class="card"><div class="card-t">Registrar nueva venta</div>'+
-    '<div class="fr c3" style="margin-bottom:12px">'+
-      '<div class="fg"><label class="fl">Tipo de cliente</label><select class="fi" id="v-tipo" onchange="upAll()"><option value="minorista">Minorista</option><option value="mayorista">Mayorista</option></select></div>'+
-      '<div class="fg"><label class="fl">Cliente</label><input class="fi" id="v-cli" list="cli-dl" value="Mostrador"><datalist id="cli-dl">'+cliOpts+'</datalist></div>'+
-      '<div class="fg"><label class="fl">Método de pago</label><select class="fi" id="v-pago"><option value="contado">💵 Efectivo</option><option value="yape">📱 Yape</option><option value="crédito">📋 Crédito</option><option value="partes">🗓 Por partes</option></select></div>'+
-    '</div><div class="dv"></div>'+
-    '<div class="card-t">Productos <button class="btn btn-sm" onclick="addItem()">'+svgPlus()+' Agregar</button></div>'+
-    '<div id="v-items"><div class="vrow" id="vr0"><div class="fg"><label class="fl">Producto</label><select class="fi" id="vp0" onchange="upPrice(0)">'+prodOpts+'</select></div><div class="fg"><label class="fl">Cant.</label><input type="number" class="fi" id="vq0" value="1" min="1" oninput="calcV()"></div><div class="fg"><label class="fl">Precio S/</label><input type="number" class="fi" id="vpr0" oninput="calcV()"></div><div class="fg"><label class="fl">Subtotal</label><input class="fi fi-i" id="vs0" readonly></div><div class="fg"><label class="fl" style="opacity:0">—</label><button class="btn btn-xs" disabled style="opacity:.3">'+svgX()+'</button></div></div></div>'+
+  var prodOpts = S.prods.map(function(p){
+    return '<option value="'+p.id+'">'+p.nom+' — stock: '+Number(p.qty||0).toFixed(1)+' kg</option>';
+  }).join('');
+
+  // Filas de sacos ya registrados
+  var filasSacos = '';
+  if (_sacos.length === 0){
+    filasSacos =
+      '<div style="text-align:center;padding:22px;color:#9ca3af;font-size:13px;'+
+      'background:#f9fafb;border-radius:8px;border:2px dashed #d1d5db;line-height:1.9">'+
+      'Presiona <b style="color:#0f4a27">＋ Agregar Saco</b> para registrar el peso de cada saco.</div>';
+  } else {
+    _sacos.forEach(function(kg, i){
+      filasSacos +=
+        '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;'+
+            'background:#f9fafb;padding:10px 12px;border-radius:8px;border:1px solid #e5e7eb">'+
+          '<span style="font-size:13px;font-weight:700;color:#6b7280;width:72px;flex-shrink:0">Saco '+(i+1)+'</span>'+
+          '<input type="number" id="saco-'+i+'" value="'+(kg||'')+'" '+
+            'placeholder="peso en kg" min="0.01" step="0.01" '+
+            'style="width:140px;padding:8px 10px;border:1px solid #d1d5db;border-radius:6px;'+
+                   'font-size:15px;font-weight:700;text-align:center;font-family:inherit" '+
+            'oninput="updSaco('+i+',this.value)">'+
+          '<span style="font-size:13px;font-weight:500;color:#374151;flex-shrink:0">kg</span>'+
+          '<div style="flex:1"></div>'+
+          '<button onclick="quitarSaco('+i+')" '+
+            'style="padding:4px 8px;background:#fee2e2;color:#991b1b;border:none;border-radius:6px;'+
+                   'cursor:pointer;font-size:12px;font-weight:700">✕</button>'+
+        '</div>';
+    });
+  }
+
+  // Barra de resumen (verde oscuro)
+  var totalKg  = _sacos.reduce(function(a,b){ return a + (b||0); }, 0);
+  var numSacos = _sacos.length;
+
+  var barraResumen =
+    '<div style="background:linear-gradient(135deg,#0f4a27,#1a6b3a);border-radius:10px;'+
+         'padding:14px 16px;margin-top:12px;display:flex;align-items:center;gap:0;flex-wrap:wrap">'+
+
+      '<div style="flex:1;min-width:90px;text-align:center;padding:0 8px">'+
+        '<div style="font-size:10px;color:rgba(255,255,255,.7);text-transform:uppercase;'+
+             'letter-spacing:.5px;margin-bottom:4px">Total sacos</div>'+
+        '<div id="bar-sacos" style="font-size:22px;font-weight:700;color:#fff">'+numSacos+'</div>'+
+      '</div>'+
+
+      '<div style="width:1px;background:rgba(255,255,255,.25);height:44px;flex-shrink:0"></div>'+
+
+      '<div style="flex:1;min-width:110px;text-align:center;padding:0 8px">'+
+        '<div style="font-size:10px;color:rgba(255,255,255,.7);text-transform:uppercase;'+
+             'letter-spacing:.5px;margin-bottom:4px">Total kilos</div>'+
+        '<div id="bar-kg" style="font-size:22px;font-weight:700;color:#fff">'+totalKg.toFixed(2)+' kg</div>'+
+      '</div>'+
+
+      '<div style="width:1px;background:rgba(255,255,255,.25);height:44px;flex-shrink:0"></div>'+
+
+      '<div style="flex:2;min-width:180px;text-align:center;padding:0 12px">'+
+        '<div style="font-size:10px;color:rgba(255,255,255,.7);text-transform:uppercase;'+
+             'letter-spacing:.5px;margin-bottom:4px">Precio por kilo (S/)</div>'+
+        '<input type="number" id="v-precio-kg" placeholder="ej: 2.50" min="0" step="0.01" '+
+          'oninput="calcPesaje()" '+
+          'style="width:130px;padding:7px 10px;background:rgba(255,255,255,.15);'+
+                 'border:1px solid rgba(255,255,255,.4);border-radius:6px;'+
+                 'font-size:17px;font-weight:700;text-align:center;color:#fff;font-family:inherit">'+
+      '</div>'+
+
+      '<div style="width:1px;background:rgba(255,255,255,.25);height:44px;flex-shrink:0"></div>'+
+
+      '<div style="flex:2;min-width:160px;text-align:center;padding:0 8px">'+
+        '<div style="font-size:10px;color:rgba(255,255,255,.7);text-transform:uppercase;'+
+             'letter-spacing:.5px;margin-bottom:4px">Total a cobrar</div>'+
+        '<div id="bar-total" style="font-size:26px;font-weight:700;color:#fff">S/ 0.00</div>'+
+      '</div>'+
+
+    '</div>';
+
+  return '<div class="card">'+
+    '<div class="card-t">Nueva venta — Pesaje por saco</div>'+
+
+    // Producto + cliente
+    '<div class="fr c3 mb12">'+
+      '<div class="fg"><label class="fl">Variedad de papa</label>'+
+        '<select class="fi" id="v-prod">'+prodOpts+'</select></div>'+
+      '<div class="fg"><label class="fl">Tipo de cliente</label>'+
+        '<select class="fi" id="v-tipo">'+
+          '<option value="minorista">Minorista</option>'+
+          '<option value="mayorista">Mayorista</option>'+
+        '</select></div>'+
+      '<div class="fg"><label class="fl">Cliente</label>'+
+        '<input class="fi" id="v-cli" list="cli-dl" value="Mostrador">'+
+        '<datalist id="cli-dl">'+S.clis.map(function(c){return '<option value="'+c.nom+'">';}).join('')+'</datalist>'+
+      '</div>'+
+    '</div>'+
+    '<div class="fr c2 mb12">'+
+      '<div class="fg"><label class="fl">Método de pago</label>'+
+        '<select class="fi" id="v-pago">'+
+          '<option value="contado">💵 Efectivo / Contado</option>'+
+          '<option value="yape">📱 Yape / Plin</option>'+
+          '<option value="crédito">📋 Crédito / Fiado</option>'+
+          '<option value="partes">🗓 Por partes</option>'+
+        '</select></div>'+
+      '<div class="fg"><label class="fl">Observaciones</label>'+
+        '<input class="fi" id="v-obs" placeholder="Notas opcionales"></div>'+
+    '</div>'+
+
     '<div class="dv"></div>'+
-    '<div class="fr c3" style="margin-bottom:12px"><div class="fg"><label class="fl">Total</label><input class="fi fi-i" id="vtot" readonly></div><div class="fg"><label class="fl">Costo</label><input class="fi fi-d" id="vcos" readonly></div><div class="fg"><label class="fl">Utilidad</label><input class="fi fi-s" id="vuti" readonly></div></div>'+
-    '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><button class="btn btn-g" onclick="saveV(false)">'+svgCheck()+' Registrar</button><button class="btn btn-p" onclick="saveV(true)">Registrar + Boleta</button><span id="vmsg" style="font-size:13px"></span></div></div>';
+
+    // Sección de pesaje
+    '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">'+
+      '<span style="font-size:12px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.4px">Pesaje de sacos</span>'+
+      '<button class="btn btn-g btn-sm" onclick="agregarSaco()">＋ Agregar Saco</button>'+
+    '</div>'+
+    '<div id="sacos-list">'+filasSacos+'</div>'+
+    barraResumen+
+
+    '<div class="dv"></div>'+
+
+    // Totales de la venta
+    '<div class="fr c3 mb12">'+
+      '<div class="fg"><label class="fl">Monto total</label><input class="fi fi-i" id="vtot" readonly></div>'+
+      '<div class="fg"><label class="fl">Costo estimado</label><input class="fi fi-d" id="vcos" readonly></div>'+
+      '<div class="fg"><label class="fl">Utilidad estimada</label><input class="fi fi-s" id="vuti" readonly></div>'+
+    '</div>'+
+
+    '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">'+
+      '<button class="btn btn-g" onclick="saveV(false)">✓ Registrar venta</button>'+
+      '<button class="btn btn-p" onclick="saveV(true)">✓ Registrar + Boleta</button>'+
+      '<span id="vmsg" style="font-size:13px;margin-left:4px"></span>'+
+    '</div>'+
+  '</div>';
 }
 
-window.addItem=function(){
-  var idx=vIC++;
-  var prodOpts=''; S.prods.forEach(function(p){prodOpts+='<option value="'+p.id+'">'+p.nom+' ('+p.qty+')</option>';});
-  var d=document.createElement('div');d.className='vrow';d.id='vr'+idx;
-  d.innerHTML='<div class="fg"><label class="fl">Producto</label><select class="fi" id="vp'+idx+'" onchange="upPrice('+idx+')">'+prodOpts+'</select></div><div class="fg"><label class="fl">Cant.</label><input type="number" class="fi" id="vq'+idx+'" value="1" min="1" oninput="calcV()"></div><div class="fg"><label class="fl">Precio S/</label><input type="number" class="fi" id="vpr'+idx+'" oninput="calcV()"></div><div class="fg"><label class="fl">Subtotal</label><input class="fi fi-i" id="vs'+idx+'" readonly></div><div class="fg"><label class="fl" style="opacity:0">—</label><button class="btn btn-xs btn-d" onclick="remItem('+idx+')">'+svgX()+'</button></div>';
-  $('v-items').appendChild(d);upPrice(idx);calcV();
-};
-window.remItem=function(i){var el=$('vr'+i);if(el){el.remove();calcV();}};
-window.upPrice=function(idx){
-  var t=($('v-tipo')&&$('v-tipo').value)||'minorista';
-  var sel=$('vp'+idx);if(!sel)return;
-  var p=S.prods.filter(function(x){return x.id===parseInt(sel.value);})[0];
-  if(p&&$('vpr'+idx))$('vpr'+idx).value=(t==='mayorista'?p.pMay:p.pMin);calcV();
-};
-window.upAll=function(){for(var i=0;i<30;i++){if(!$('vp'+i))continue;upPrice(i);}calcV();};
-window.calcV=function(){
-  var tot=0,cos=0;
-  for(var i=0;i<30;i++){var pEl=$('vp'+i);if(!pEl)continue;var q=parseFloat(($('vq'+i)&&$('vq'+i).value)||0),pr=parseFloat(($('vpr'+i)&&$('vpr'+i).value)||0);var p=S.prods.filter(function(x){return x.id===parseInt(pEl.value);})[0];var sub=q*pr;var sEl=$('vs'+i);if(sEl)sEl.value=mon(sub);tot+=sub;if(p)cos+=q*p.costo;}
-  if($('vtot'))$('vtot').value=mon(tot);if($('vcos'))$('vcos').value=mon(cos);if($('vuti'))$('vuti').value=mon(tot-cos);
+// ─── Agregar saco (sin límite) ───
+window.agregarSaco = function(){
+  _sacos.push(0);
+  rend();
+  // Focus automático en el nuevo campo
+  setTimeout(function(){
+    var el = document.getElementById('saco-' + (_sacos.length - 1));
+    if(el){ el.focus(); el.select(); }
+  }, 60);
 };
 
-window.saveV=async function(boleta){
-  var tipo=($('v-tipo')&&$('v-tipo').value)||'minorista';
-  var cli=($('v-cli')&&$('v-cli').value)||'Mostrador';
-  var pago=($('v-pago')&&$('v-pago').value)||'contado';
-  var items=[];var tot=0,cos=0;
-  for(var i=0;i<30;i++){
-    var pEl=$('vp'+i);if(!pEl)continue;
-    var qty=parseInt(($('vq'+i)&&$('vq'+i).value)||0);
-    var precio=parseFloat(($('vpr'+i)&&$('vpr'+i).value)||0);
-    var p=S.prods.filter(function(x){return x.id===parseInt(pEl.value);})[0];
-    if(!p||qty<1)continue;
-    if(qty>p.qty){var mm=$('vmsg');if(mm){mm.textContent='Sin stock: '+p.nom;mm.style.color='#991b1b';}return;}
-    items.push({nom:p.nom,pid:p.id,qty:qty,precio:precio,costo:p.costo});
-    tot+=qty*precio;cos+=qty*p.costo;
-  }
-  if(!items.length)return;
-  // Actualizar stock
-  for(var j=0;j<items.length;j++){
-    var it=items[j];
-    var prod=S.prods.filter(function(x){return x.id===it.pid;})[0];
-    if(prod){prod.qty-=it.qty;await saveCol('prods',prod);}
-  }
-  var nv={id:nid(),items:items,tipo:tipo,cli:cli,pago:pago,total:tot,costoT:cos,util:tot-cos,fecha:hoy(),hora:hora(),anu:false,motAnu:'',registradoPor:S.userEmail};
-  S.ventas.push(nv);
-  await saveCol('ventas',nv);
-  if(pago==='crédito'||pago==='partes'){
-    var c=S.clis.filter(function(x){return x.nom===cli;})[0];
-    if(c){c.deuda=(c.deuda||0)+tot;c.hist=(c.hist||[]);c.hist.push({f:hoy(),m:tot,t:'deuda'});await saveCol('clis',c);}
-  }
-  vIC=1;
-  if(boleta)verBoleta(nv.id);
-  else{var mm=$('vmsg');if(mm){mm.textContent='✅ Venta registrada';mm.style.color='#065f46';}setTimeout(function(){rend();},900);}
+// ─── Actualizar peso de un saco ───
+window.updSaco = function(idx, val){
+  _sacos[idx] = parseFloat(val) || 0;
+  calcPesaje();
 };
 
-function rHistV(){
-  var v=S.ventas.filter(function(x){return !x.anu;}).slice().reverse();
-  var rows='';
-  v.forEach(function(x){
-    var prods=(x.items||[]).map(function(i){return i.nom+' x'+i.qty;}).join(', ');
-    var mg=x.total>0?Math.round(x.util/x.total*100):0;
-    var pc=x.pago==='contado'?'bd-ok':x.pago==='yape'?'bd-i':x.pago==='crédito'?'bd-d':'bd-w';
-    rows+='<tr><td class="cm">'+x.fecha+'</td><td class="cm">'+x.hora+'</td><td class="fw6" style="max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+prods+'</td><td>'+x.cli+'</td><td>'+h_tag(x.tipo)+'</td><td>'+h_badge(x.pago,pc)+'</td><td class="fw6">'+mon(x.total)+'</td><td class="cs fw6">+'+mon(x.util)+'</td><td class="cm">'+mg+'%</td><td class="ta"><button class="btn btn-xs btn-p" onclick="verBoleta('+x.id+')">'+svgEye()+'</button><button class="btn btn-xs btn-d" onclick="mAnular('+x.id+')">'+svgX()+'</button></td></tr>';
-  });
-  return '<div class="card"><div class="card-t">Historial '+h_badge(v.length,'bd-i')+'</div><div class="tw"><table class="tbl"><thead><tr><th>Fecha</th><th>Hora</th><th>Productos</th><th>Cliente</th><th>Tipo</th><th>Pago</th><th>Total</th><th>Utilidad</th><th>Margen</th><th></th></tr></thead><tbody>'+rows+'</tbody></table></div></div>';
-}
+// ─── Quitar saco ───
+window.quitarSaco = function(idx){
+  _sacos.splice(idx, 1);
+  rend();
+  setTimeout(calcPesaje, 40);
+};
 
-function rAnulaciones(){
-  var v=S.ventas.filter(function(x){return x.anu;}).slice().reverse();
-  if(!v.length)return '<div class="card"><div class="empty">Sin anulaciones</div></div>';
-  var rows='';
-  v.forEach(function(x){var prods=(x.items||[]).map(function(i){return i.nom+' x'+i.qty;}).join(', ');rows+='<tr><td class="cm">'+x.fecha+'</td><td class="fw6">'+prods+'</td><td>'+x.cli+'</td><td class="cd fw6">'+mon(x.total)+'</td><td>'+h_tag(x.motAnu)+'</td></tr>';});
-  return '<div class="card"><div class="card-t">Ventas anuladas '+h_badge(v.length,'bd-d')+'</div><div class="tw"><table class="tbl"><thead><tr><th>Fecha</th><th>Productos</th><th>Cliente</th><th>Total</th><th>Motivo</th></tr></thead><tbody>'+rows+'</tbody></table></div></div>';
-}
+// ─── Calcular totales en tiempo real ───
+window.calcPesaje = function(){
+  var totalKg  = _sacos.reduce(function(a,b){ return a+(b||0); }, 0);
+  var precioKg = parseFloat((document.getElementById('v-precio-kg') && document.getElementById('v-precio-kg').value) || 0);
+
+  // Costo del producto (por kg)
+  var pid  = parseInt((document.getElementById('v-prod') && document.getElementById('v-prod').value) || 0);
+  var prod = S.prods.filter(function(x){ return x.id === pid; })[0];
+  var costoKg = prod ? (prod.costo || 0) : 0;
+
+  var total    = totalKg * precioKg;
+  var costoT   = totalKg * costoKg;
+  var utilidad = total - costoT;
+
+  // Barra verde
+  var bs = document.getElementById('bar-sacos');  if(bs) bs.textContent = _sacos.length;
+  var bk = document.getElementById('bar-kg');     if(bk) bk.textContent = totalKg.toFixed(2) + ' kg';
+  var bt = document.getElementById('bar-total');  if(bt) bt.textContent = 'S/ ' + total.toLocaleString('es-PE',{minimumFractionDigits:2,maximumFractionDigits:2});
+
+  // Campos de totales
+  var vtot = document.getElementById('vtot'); if(vtot) vtot.value = mon(total);
+  var vcos = document.getElementById('vcos'); if(vcos) vcos.value = mon(costoT);
+  var vuti = document.getElementById('vuti'); if(vuti) vuti.value = mon(utilidad);
+};
+
+// alias legado
+window.calcV  = window.calcPesaje;
+window.upAll  = function(){ calcPesaje(); };
+window.upPrice = function(){ calcPesaje(); };
+
+// ─── Guardar venta ───
+window.saveV = async function(boleta){
+  if(_saveInProgress) return;
+  var mm = document.getElementById('vmsg');
+  function err(t){ if(mm){ mm.textContent = '⚠ '+t; mm.style.color='#991b1b'; } }
+
+  // Validaciones
+  var pid      = parseInt((document.getElementById('v-prod')&&document.getElementById('v-prod').value)||0);
+  var precioKg = parseFloat((document.getElementById('v-precio-kg')&&document.getElementById('v-precio-kg').value)||0);
+  var tipo     = (document.getElementById('v-tipo')&&document.getElementById('v-tipo').value)||'minorista';
+  var cli      = (document.getElementById('v-cli')&&document.getElementById('v-cli').value)||'Mostrador';
+  var pago     = (document.getElementById('v-pago')&&document.getElementById('v-pago').value)||'contado';
+  var obs      = (document.getElementById('v-obs')&&document.getElementById('v-obs').value)||'';
+
+  if(!pid)              { err('Selecciona un producto'); return; }
+  if(_sacos.length===0) { err('Agrega al menos un saco'); return; }
+  if(precioKg<=0)       { err('Ingresa el precio por kilo'); return; }
+
+  var pesosValidos = _sacos.filter(function(kg){ return kg>0; });
+  if(pesosValidos.length === 0){ err('Ingresa el peso de los sacos'); return; }
+
+  var totalKg = _sacos.reduce(function(a,b){ return a+(b||0); }, 0);
+  if(totalKg <= 0){ err('El total de kilos debe ser mayor a 0'); return; }
+
+  var prod = S.prods.filter(function(x){ return x.id===pid; })[0];
+  if(!prod){ err('Producto no encontrado'); return; }
+  if(totalKg > (prod.qty||0)){
+    err('Stock insuficiente: '+Number(prod.qty||0).toFixed(2)+' kg disponibles, necesitas '+totalKg.toFixed(2)+' kg');
+    return;
+  }
+
+  _saveInProgress = true;
+  if(mm){ mm.textContent='Guardando...'; mm.style.color='#6b7280'; }
+
+  try {
+    var costoKg  = prod.costo || 0;
+    var total    = totalKg * precioKg;
+    var costoT   = totalKg * costoKg;
+    var utilidad = total - costoT;
+
+    // Descontar kg del inventario
+    prod.qty = Math.max(0, (prod.qty||0) - totalKg);
+    await saveCol('prods', prod);
+
+    // Registro de venta
+    var nv = {
+      id          : nid(),
+      prod        : prod.nom,
+      pid         : prod.id,
+      sacos       : _sacos.slice(),      // pesos individuales
+      numSacos    : _sacos.length,
+      totalKg     : totalKg,
+      precioKg    : precioKg,
+      items       : [{nom:prod.nom, pid:prod.id, qty:totalKg, precio:precioKg, costo:costoKg}],
+      tipo        : tipo,
+      cli         : cli,
+      pago        : pago,
+      obs         : obs,
+      total       : total,
+      costoT      : costoT,
+      util        : utilidad,
+      fecha       : hoy(),
+      hora        : hora(),
+      anu         : false,
+      motAnu      : '',
+      registradoPor: S.userEmail
+    };
+
+    S.ventas.push(nv);
+    await saveCol('ventas', nv);
+
+    // Si es crédito, agregar deuda al cliente
+    if(pago==='crédito'||pago==='partes'){
+      var c = S.clis.filter(function(x){ return x.nom===cli; })[0];
+      if(c){
+        c.deuda = (c.deuda||0) + total;
+        if(!c.hist) c.hist = [];
+        c.hist.push({f:hoy(),m:total,t:'deuda — venta #'+nv.id});
+        await saveCol('clis', c);
+      }
+    }
+
+    _sacos = [];
+    _saveInProgress = false;
+
+    if(boleta){ verBoleta(nv.id); }
+    else {
+      if(mm){ mm.textContent = '✅ Venta registrada — '+totalKg.toFixed(2)+' kg / '+_sacos.length+' sacos'; mm.style.color='#065f46'; }
+      setTimeout(function(){ rend(); }, 1000);
+    }
+  } catch(e){
+    _saveInProgress = false;
+    err('Error al guardar: '+e.message);
+    console.error(e);
+  }
+};
+
 
 // ══ INVENTARIO ══
 function rInv(){
@@ -788,8 +995,40 @@ function txtBoleta(v){
   function cen(t,w){w=w||L;var p=Math.max(0,Math.floor((w-t.length)/2));var sp='';for(var i=0;i<p;i++)sp+=' ';return sp+t;}
   function rpad(l,r,w){w=w||L;var sp=Math.max(1,w-l.length-r.length);var s='';for(var i=0;i<sp;i++)s+=' ';return l+s+r;}
   var sep='';for(var i=0;i<L;i++)sep+='─';
-  var prods='';(v.items||[]).forEach(function(it){var nm=it.nom.substring(0,13);while(nm.length<13)nm+=' ';prods+=nm+' x'+it.qty+' '+mon(it.precio)+'\n';});
-  return cen(n.nom)+'\n'+cen(n.sl)+'\n'+cen('RUC: '+n.ruc)+'\n'+sep+'\n'+cen('COMPROBANTE DE VENTA')+'\n'+sep+'\nNº: '+String(v.id).padStart(5,'0')+'   '+v.fecha+'\nCliente: '+v.cli+'\nPago: '+v.pago+'\n'+sep+'\n'+prods+sep+'\n'+rpad('TOTAL:',mon(v.total))+'\n'+sep+'\n'+cen('¡Gracias!');
+
+  var detalle='';
+  if(v.numSacos && v.totalKg){
+    // Venta por pesaje
+    (v.items||[]).forEach(function(it){
+      detalle += it.nom+'\n';
+      // Mostrar pesos individuales
+      if(it.pesos && it.pesos.length){
+        it.pesos.forEach(function(kg,i){
+          var row='  Saco '+(i+1)+': '+kg.toFixed(2)+' kg';
+          detalle += row+'\n';
+        });
+      }
+      detalle += sep+'\n';
+      detalle += rpad('Total sacos:',v.numSacos+' sacos')+'\n';
+      detalle += rpad('Total kilos:',v.totalKg.toFixed(2)+' kg')+'\n';
+      detalle += rpad('Precio/kg:',mon(v.precioKg))+'\n';
+    });
+  } else {
+    (v.items||[]).forEach(function(it){
+      var nm=it.nom.substring(0,13);while(nm.length<13)nm+=' ';
+      detalle+=nm+' x'+it.qty+' '+mon(it.precio)+'\n';
+    });
+  }
+
+  return cen(n.nom)+'\n'+cen(n.sl)+'\n'+cen('RUC: '+n.ruc)+'\n'+cen(n.dir)+'\n'+
+    sep+'\n'+cen('COMPROBANTE DE VENTA')+'\n'+sep+'\n'+
+    'Nº: '+String(v.id).padStart(5,'0')+'   '+v.fecha+' '+v.hora+'\n'+
+    'Cliente: '+v.cli+'\nTipo: '+v.tipo+'  Pago: '+v.pago+'\n'+
+    sep+'\n'+detalle+sep+'\n'+
+    rpad('TOTAL A PAGAR:',mon(v.total))+'\n'+
+    rpad('UTILIDAD:','+'+mon(v.util))+'\n'+
+    sep+'\n'+cen('¡Gracias por su compra!')+
+    '\n'+cen('De la Chacra a tu Olla 🐾');
 }
 window.updBlt=function(){var p=$('blt-prev');if(p&&S.ventas.length)p.textContent=txtBoleta(S.ventas[S.ventas.length-1]);};
 window.verBoleta=function(id){
