@@ -128,6 +128,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
 .fl-row:last-child{border:none}
 .vrow{display:grid;grid-template-columns:2fr 70px 95px 95px 30px;gap:8px;align-items:end;margin-bottom:8px}
 .svg-icon{display:inline-flex;align-items:center;justify-content:center;vertical-align:middle;flex-shrink:0}
+.mb12{margin-bottom:12px}
 </style>
 </head>
 <body>
@@ -293,6 +294,8 @@ var S={
   stMin:12,
   prods:[],ventas:[],clis:[],provs:[],entradas:[],mermas:[],ajustes:[],
 };
+// Exponer S globalmente para que los onclick inline accedan a S.tab, S.neg, etc.
+window.S = S;
 
 // ── ROLES ──
 var selectedRole='dueno';
@@ -503,6 +506,8 @@ function rend(){
     console.error(e);
   }
 }
+// Exponer rend globalmente para onclick inline
+window.rend = rend;
 
 // ══ DASHBOARD ══
 function rDash(){
@@ -573,9 +578,9 @@ function rVentas(){
   var t = S.tab || 'nueva';
   var tabs =
     '<div class="tabs">' +
-    '<button class="inv-tab-btn '+(t==='nueva'?'on':'')+'" onclick="vTab(\'nueva\')">Nueva venta</button>' +
-    '<button class="inv-tab-btn '+(t==='hist'?'on':'')+'" onclick="vTab(\'hist\')">Historial</button>' +
-    '<button class="inv-tab-btn '+(t==='anu'?'on':'')+'" onclick="vTab(\'anu\')">Anulaciones</button>' +
+    '<button class="tab '+(t==='nueva'?'on':'')+'" onclick="vTab(\'nueva\')">Nueva venta</button>' +
+    '<button class="tab '+(t==='hist'?'on':'')+'" onclick="vTab(\'hist\')">Historial</button>' +
+    '<button class="tab '+(t==='anu'?'on':'')+'" onclick="vTab(\'anu\')">Anulaciones</button>' +
     '</div>';
   if (t === 'nueva') return tabs + rNuevaV();
   if (t === 'hist')  return tabs + rHistV();
@@ -858,7 +863,7 @@ window.saveV = async function(boleta){
 
     if(boleta){ verBoleta(nv.id); }
     else {
-      if(mm){ mm.textContent = '✅ Venta registrada — '+totalKg.toFixed(2)+' kg / '+_sacos.length+' sacos'; mm.style.color='#065f46'; }
+      if(mm){ mm.textContent = '✅ Venta registrada — '+totalKg.toFixed(2)+' kg / '+nv.numSacos+' sacos'; mm.style.color='#065f46'; }
       setTimeout(function(){ rend(); }, 1000);
     }
   } catch(e){
@@ -867,6 +872,80 @@ window.saveV = async function(boleta){
     console.error(e);
   }
 };
+
+
+// ══ HISTORIAL DE VENTAS ══
+function rHistV(){
+  var vA=S.ventas.filter(function(v){return !v.anu;}).slice().reverse();
+  if(!vA.length)return '<div class="card"><div class="empty">Sin ventas registradas aún</div></div>';
+  var tot=0,util=0;
+  vA.forEach(function(v){tot+=v.total;util+=v.util;});
+  var rows='';
+  vA.forEach(function(v){
+    var desc='';
+    if(v.totalKg){
+      desc=v.prod||((v.items||[]).map(function(i){return i.nom;}).join(', '));
+      desc+=' — '+Number(v.totalKg).toFixed(2)+' kg ('+v.numSacos+' sacos)';
+    }else{
+      desc=(v.items||[]).map(function(i){return i.nom+' x'+i.qty;}).join(', ');
+    }
+    rows+='<tr>'+
+      '<td class="cm">#'+String(v.id).padStart(5,'0')+'</td>'+
+      '<td class="cm">'+v.fecha+' '+v.hora+'</td>'+
+      '<td class="fw6" style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+desc+'</td>'+
+      '<td class="fw6">'+v.cli+'</td>'+
+      '<td>'+h_tag(v.tipo)+'</td>'+
+      '<td>'+v.pago+'</td>'+
+      '<td class="fw6">'+mon(v.total)+'</td>'+
+      '<td class="cs">+'+mon(v.util)+'</td>'+
+      '<td class="ta">'+
+        '<button class="btn btn-xs btn-p" onclick="verBoleta('+v.id+')">'+svgEye()+'</button>'+
+        (S.rol==='dueno'?'<button class="btn btn-xs btn-d" onclick="mAnular('+v.id+')">'+svgX()+'</button>':'')+
+      '</td>'+
+    '</tr>';
+  });
+  return '<div class="card">'+
+    '<div class="card-t">Historial de ventas '+h_badge(vA.length,'bd-g')+
+      '<span class="cm" style="font-size:12px">Total: <b class="cs">'+mon(tot)+'</b> &nbsp;|&nbsp; Util.: <b class="cs">'+mon(util)+'</b></span>'+
+    '</div>'+
+    '<div class="tw"><table class="tbl"><thead><tr>'+
+      '<th>Nº</th><th>Fecha / Hora</th><th>Producto</th><th>Cliente</th>'+
+      '<th>Tipo</th><th>Pago</th><th>Total</th><th>Utilidad</th><th></th>'+
+    '</tr></thead><tbody>'+rows+'</tbody></table></div></div>';
+}
+
+// ══ ANULACIONES ══
+function rAnulaciones(){
+  var vA=S.ventas.filter(function(v){return v.anu;}).slice().reverse();
+  if(!vA.length)return '<div class="card"><div class="empty">Sin ventas anuladas ✅</div></div>';
+  var totAnu=0;
+  vA.forEach(function(v){totAnu+=v.total;});
+  var rows='';
+  vA.forEach(function(v){
+    var desc='';
+    if(v.totalKg){
+      desc=(v.prod||'')+'  '+Number(v.totalKg).toFixed(2)+' kg';
+    }else{
+      desc=(v.items||[]).map(function(i){return i.nom+' x'+i.qty;}).join(', ');
+    }
+    rows+='<tr>'+
+      '<td class="cm">#'+String(v.id).padStart(5,'0')+'</td>'+
+      '<td class="cm">'+v.fecha+'</td>'+
+      '<td class="fw6">'+desc+'</td>'+
+      '<td class="fw6">'+v.cli+'</td>'+
+      '<td class="fw6 cd">'+mon(v.total)+'</td>'+
+      '<td>'+h_badge(v.motAnu||'—','bd-d')+'</td>'+
+    '</tr>';
+  });
+  return '<div class="card">'+
+    '<div class="card-t">Ventas anuladas '+h_badge(vA.length,'bd-d')+
+      '<span class="cm" style="font-size:12px">Total anulado: <b class="cd">'+mon(totAnu)+'</b></span>'+
+    '</div>'+
+    '<div class="tw"><table class="tbl"><thead><tr>'+
+      '<th>Nº</th><th>Fecha</th><th>Producto</th><th>Cliente</th><th>Total</th><th>Motivo</th>'+
+    '</tr></thead><tbody>'+rows+'</tbody></table></div></div>';
+}
+
 
 
 // ══ INVENTARIO ══
